@@ -1,0 +1,58 @@
+vars:
+  execution-role: &execution-role CustodianRoleArn
+  notify-non-compliant: &notify-non-compliant
+    type: notify
+    violation_desc: SageMaker Notebook will be removed due to non-compliance.
+    action_desc: ":crying:"
+    to:
+      - SlackWebHookUrl
+    transport:
+      type: sqs
+      queue: TransportQueueUrl
+
+policies:
+
+  - name: sagemaker-notebook-tag-non-compliant
+    resource: sagemaker-notebook
+    mode:
+      type: cloudtrail
+      events:
+        - source: sagemaker.amazonaws.com
+          event: CreateNotebookInstance
+          ids: "responseElements.notebookInstanceArn"
+      role: *execution-role
+    filters:
+      - or:
+        - DirectInternetAccess: Enabled
+        - KmsKeyId: absent
+    actions:
+      - type: tag
+        key: NonCompliantTag
+        value: "TRUE"
+      - *notify-non-compliant
+
+  - name: sagemaker-notebook-stop-non-compliant
+    resource: sagemaker-notebook
+    mode:
+      type: periodic
+      schedule: "rate(5 minutes)"
+      timeout: 45
+      role: *execution-role
+    filters:
+      - "tag:NonCompliantTag": "TRUE"
+      - NotebookInstanceStatus: InService
+    actions:
+      - stop
+
+  - name: sagemaker-notebook-delete-non-compliant
+    resource: sagemaker-notebook
+    mode:
+      type: periodic
+      schedule: "rate(5 minutes)"
+      timeout: 45
+      role: *execution-role
+    filters:
+      - "tag:NonCompliantTag": "TRUE"
+      - NotebookInstanceStatus: Stopped
+    actions:
+      - delete

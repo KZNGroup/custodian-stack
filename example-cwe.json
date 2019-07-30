@@ -1,0 +1,55 @@
+{
+  "version": "0",
+  "id": "4ffbca0e-56b5-b80d-dfbd-acbe6ad2743d",
+  "detail-type": "AWS API Call via CloudTrail",
+  "source": "aws.sagemaker",
+  "account": "***",
+  "time": "2019-07-09T07:15:14Z",
+  "region": "***",
+  "resources": [],
+  "detail": {
+    "eventVersion": "1.05",
+    "userIdentity": {
+      "type": "AssumedRole",
+      "principalId": "***:***",
+      "arn": "arn:aws:sts::***:assumed-role/***/***",
+      "accountId": "***",
+      "accessKeyId": "***",
+      "sessionContext": {
+        "sessionIssuer": {
+          "type": "Role",
+          "principalId": "***",
+          "arn": "arn:aws:iam::***:role/***",
+          "accountId": "***",
+          "userName": "***"
+        },
+        "webIdFederationData": {},
+        "attributes": {
+          "mfaAuthenticated": "true",
+          "creationDate": "2019-07-09T06:55:01Z"
+        }
+      }
+    },
+    "eventTime": "2019-07-09T07:15:14Z",
+    "eventSource": "sagemaker.amazonaws.com",
+    "eventName": "CreateNotebookInstance",
+    "awsRegion": "***",
+    "sourceIPAddress": "58.96.117.26",
+    "userAgent": "aws-internal/3 aws-sdk-java/1.11.550 Linux/4.9.137-0.1.ac.218.74.329.metal1.x86_64 OpenJDK_64-Bit_Server_VM/25.212-b03 java/1.8.0_212 vendor/Oracle_Corporation",
+    "requestParameters": {
+      "notebookInstanceName": "test",
+      "instanceType": "ml.t2.medium",
+      "roleArn": "arn:aws:iam::***:role/service-role/***",
+      "directInternetAccess": "Enabled",
+      "volumeSizeInGB": 5,
+      "rootAccess": "Enabled"
+    },
+    "responseElements": {
+      "notebookInstanceArn": "arn:aws:sagemaker:***:***:notebook-instance/***"
+    },
+    "requestID": "d4c18cd0-a021-4609-9a7f-b8320c9eee37",
+    "eventID": "d329f3df-8d16-4363-bf70-59be36bbecd0",
+    "eventType": "AwsApiCall"
+  },
+  "debug": true
+}

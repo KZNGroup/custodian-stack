@@ -1,0 +1,420 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Cloud Custodian test and deploy pipeline
+
+Parameters:
+  GithubOwner:
+    Type: String
+    Description: The owner of the github repository
+  GithubRepo:
+    Type: String
+    Description: The name of the github repository
+  GithubBranch:
+    Type: String
+    Description: The branch of the github repository
+    Default: master
+  GithubOAuthToken:
+    Type: String
+    Description: The OAuth token of the github repository
+    NoEcho: true
+  SlackWebHookUrl:
+    Type: String
+    Description: The URL of the slack webhook to submit notifications on
+    NoEcho: true
+
+Resources:
+
+  CustodianPipelineArtifactStore:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+
+  TestCustodianCodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+      Path: /service-role/
+      ManagedPolicyArns:
+        # allow readonly access to run dry-run
+        - arn:aws:iam::aws:policy/ReadOnlyAccess
+      Policies:
+        - PolicyName: access-to-logs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:GetLogEvents
+                Effect: Allow
+                Resource: '*'
+        - PolicyName: access-to-s3
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                  - s3:ListBucket
+                  - s3:PutObject
+                  - s3:PutObjectAcl
+                  - s3:GetObject
+                Effect: Allow
+                Resource:
+                  - !Sub 'arn:aws:s3:::${CustodianPipelineArtifactStore}/*'
+
+  DeployCustodianCodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+      Path: /service-role/
+      Policies:
+        - PolicyName: access-to-logs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Effect: Allow
+                Resource: '*'
+        - PolicyName: access-to-s3
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                  - s3:ListBucket
+                  - s3:PutObject
+                  - s3:PutObjectAcl
+                  - s3:GetObject
+                Effect: Allow
+                Resource:
+                  - !Sub 'arn:aws:s3:::${CustodianPipelineArtifactStore}/*'
+        - PolicyName: allow-deploy-custodian-serverless
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DeleteNetworkInterface
+                  - ec2:CreateNetworkInterface
+                  - events:PutRule
+                  - events:PutTargets
+                  - events:DescribeRule
+                  - events:ListTargetsByRule
+                  - iam:PassRole
+                  - lambda:CreateFunction
+                  - lambda:TagResource
+                  - lambda:CreateEventSourceMapping
+                  - lambda:UntagResource
+                  - lambda:PutFunctionConcurrency
+                  - lambda:DeleteFunction
+                  - lambda:UpdateEventSourceMapping
+                  - lambda:InvokeFunction
+                  - lambda:UpdateFunctionConfiguration
+                  - lambda:UpdateAlias
+                  - lambda:UpdateFunctionCode
+                  - lambda:AddPermission
+                  - lambda:DeleteAlias
+                  - lambda:DeleteFunctionConcurrency
+                  - lambda:DeleteEventSourceMapping
+                  - lambda:RemovePermission
+                  - lambda:CreateAlias
+                  - lambda:GetFunction
+                Resource: '*'
+
+  TestCustodianCodeBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:2.0
+        Type: LINUX_CONTAINER
+      Name: !Sub ${AWS::StackName}-test
+      ServiceRole: !GetAtt TestCustodianCodeBuildRole.Arn
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |-
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                python: 3.7
+            build:
+              commands:
+                - ./test.sh
+          artifacts:
+            files:
+              - 'out/**/*'
+
+  DeployCustodianCodeBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:2.0
+        Type: LINUX_CONTAINER
+        EnvironmentVariables:
+          - Name: TRANSPORT_QUEUE_URL
+            Value: !Ref NotificationQueue
+          - Name: POLICY_ROLE_ARN
+            Value: !GetAtt CustodianPolicyRole.Arn
+          - Name: SLACK_WEBHOOK_URL
+            Value: !Ref SlackWebHookUrl
+          - Name: MAILER_ROLE_ARN
+            Value: !GetAtt CustodianMailerRole.Arn
+          - Name: MAILER_REGION
+            Value: !Sub ${AWS::Region}
+      Name: !Sub ${AWS::StackName}-deploy
+      ServiceRole: !GetAtt DeployCustodianCodeBuildRole.Arn
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |-
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                python: 3.7
+            build:
+              commands:
+                - ./deploy.sh
+          artifacts:
+            files:
+              - 'out/**/*'
+
+  CustodianPipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+      Path: /service-role/
+      Policies:
+        - PolicyName: access-s3-artefacts
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                  - s3:ListBucket
+                  - s3:PutObject
+                  - s3:PutObjectAcl
+                  - s3:GetObject
+                Effect: Allow
+                Resource: !Sub 'arn:aws:s3:::${CustodianPipelineArtifactStore}/*'
+        - PolicyName: access-to-logs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Effect: Allow
+                Resource: '*'
+        - PolicyName: codebuild-access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                  - codebuild:StartBuild
+                  - codebuild:StopBuild
+                  - codebuild:BatchGetBuilds
+                Effect: Allow
+                Resource:
+                  - !GetAtt TestCustodianCodeBuild.Arn
+                  - !GetAtt DeployCustodianCodeBuild.Arn
+        - PolicyName: codebuild-role
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action: iam:PassRole
+                Effect: Allow
+                Resource:
+                  - !GetAtt TestCustodianCodeBuild.Arn
+                  - !GetAtt DeployCustodianCodeBuild.Arn
+        - PolicyName: allow-deploy-stack
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudformation:*
+                Resource: !Sub 'arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}-cloudformation/*'
+
+  CustodianPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn: !GetAtt CustodianPipelineServiceRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Provider: GitHub
+                Version: '1'
+              OutputArtifacts:
+                - Name: SourceOutput
+              Configuration:
+                Owner: !Ref GithubOwner
+                Repo: !Ref GithubRepo
+                Branch: !Ref GithubBranch
+                OAuthToken: !Ref GithubOAuthToken
+                PollForSourceChanges: false
+              RunOrder: 1
+        - Name: Test
+          Actions:
+            - Name: TestAction
+              InputArtifacts:
+                - Name: SourceOutput
+              ActionTypeId:
+                Category: Test
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref TestCustodianCodeBuild
+              OutputArtifacts:
+                - Name: TestOutput
+              RunOrder: 1
+        - Name: Approval
+          Actions:
+            - Name: Approval
+              ActionTypeId:
+                Category: Approval
+                Owner: AWS
+                Provider: Manual
+                Version: '1'
+        - Name: Release
+          Actions:
+            - Name: DeployCustodianAction
+              InputArtifacts:
+                - Name: SourceOutput
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref DeployCustodianCodeBuild
+              OutputArtifacts:
+                - Name: DeployOutput
+              RunOrder: 2
+      ArtifactStore:
+        Type: S3
+        Location: !Ref CustodianPipelineArtifactStore
+
+  NotificationQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub ${AWS::StackName}-custodian-mailer
+    
+  CustodianPolicyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+        Version: '2012-10-17'
+      Policies:
+        - PolicyName: logging-allow
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Effect: Allow
+                Resource: '*'
+        - PolicyName: notify-allow
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                  - iam:ListAccountAliases
+                Effect: Allow
+                Resource: '*'
+              - Action:
+                  - sqs:SendMessage
+                Effect: Allow
+                Resource: !GetAtt NotificationQueue.Arn
+        - PolicyName: sagemaker-allow
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                  - sagemaker:ListNotebookInstances
+                  - sagemaker:DescribeNotebookInstance
+                  - sagemaker:ListTags
+                  - sagemaker:AddTags
+                  - sagemaker:StopNotebookInstance
+                  - sagemaker:DeleteNotebookInstance
+                Effect: Allow
+                Resource: '*'
+
+  CustodianMailerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+        Version: '2012-10-17'
+      Policies:
+        - PolicyName: queue-allow
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                  - sqs:GetQueueAttributes
+                  - sqs:GetQueueUrl
+                  - sqs:ListDeadLetterSourceQueues
+                  - sqs:ListQueues
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                Resource: !GetAtt NotificationQueue.Arn
+                Effect: Allow
+        - PolicyName: logging-allow
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Effect: Allow
+                Resource: '*'
